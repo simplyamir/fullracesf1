@@ -1,12 +1,19 @@
-
 <!doctype html>
 <html lang="en">
+
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#101114">
     <title>Full Races: F1 Player</title>
+
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+
     <style>
+        * {
+            box-sizing: border-box;
+        }
+
         body {
             max-width: 1000px;
             margin: 25px auto;
@@ -16,70 +23,190 @@
             font-family: system-ui, sans-serif;
         }
 
+        h1 {
+            text-align: center;
+            margin-bottom: 22px;
+        }
+
         video {
             display: block;
             width: 100%;
             max-height: 70vh;
-            background: black;
+            background: #000;
             border-radius: 10px;
         }
 
         #status {
-            color: #bbb;
+            display: none;
             margin: 12px 0;
+            padding: 12px;
+            background: #292126;
+            border: 1px solid #673438;
+            border-radius: 8px;
+            color: #ffb4b4;
             overflow-wrap: anywhere;
         }
 
-        button {
-            padding: 12px 18px;
+        #status.visible {
+            display: block;
+        }
+
+        h2 {
+            margin-top: 26px;
+            text-align: center;
+        }
+
+        #streams {
+            display: grid;
+            grid-template-columns: repeat(auto-fit,
+                    minmax(min(100%, 220px), 1fr));
+            gap: 10px;
+            margin-bottom: 30px;
+        }
+
+        .stream-button {
+            min-width: 0;
+            padding: 14px;
             color: white;
             background: #24252b;
             border: 1px solid #45464e;
             border-radius: 8px;
+            text-align: center;
+            overflow-wrap: anywhere;
             cursor: pointer;
+            font: inherit;
         }
 
-        button:hover {
+        .stream-button.active {
+            border-color: #e10600;
+            background: #351d20;
+        }
+
+        .stream-button:hover {
             background: #33343c;
         }
 
-        #play {
-            border-color: #e10600;
+        .stream-button:focus-visible {
+            outline: 2px solid #e10600;
+            outline-offset: 3px;
+        }
+
+        #empty {
+            display: none;
+            text-align: center;
+            color: #aaa;
+            padding: 16px;
         }
     </style>
 </head>
-<body>
-    <h1 style="text-align:center">🏁 Full Races: F1</h1>
 
-    <video id="video" controls playsinline></video>
-    <div id="status" role="status">Preparing player...</div>
-    <div style="text-align:center">
-        <button id="play" type="button">▶️ Play stream</button>
-    </div>
+<body>
+    <h1>🏁 Full Races: F1</h1>
+
+    <video id="video" controls autoplay playsinline webkit-playsinline preload="auto"></video>
+
+    <div id="status" role="alert"></div>
+
+    <h2>Servers</h2>
+    <div id="streams"></div>
+    <div id="empty">No other servers are available in the server list.</div>
 
     <script>
         const params = new URLSearchParams(location.search);
-        const contentId = params.get("content_id");
-        const streamName = params.get("name") || "Selected stream";
+        const selectedId = params.get("content_id");
+        const selectedName = params.get("name") || "Selected stream";
 
         const video = document.getElementById("video");
         const status = document.getElementById("status");
-        const playButton = document.getElementById("play");
+        const streamList = document.getElementById("streams");
+        const emptyMessage = document.getElementById("empty");
 
-        const validId = /^[a-f0-9]{40}$/i.test(contentId || "");
+        const ACE_URL = "http://127.0.0.1:6878";
+        const STREAMS_URL = new URL("streams.json", location.href);
+
         let hls = null;
+        let streams = [];
+        let currentStreamId = null;
+        let playbackAttempt = 0;
 
-        function showStatus(message) {
+        function showError(message) {
             status.textContent = message;
+            status.classList.add("visible");
         }
 
-        function playStream() {
-            if (!validId) {
-                showStatus(
-                    "No valid stream ID. Open this player using a Watch button in Telegram."
+        function clearError() {
+            status.textContent = "";
+            status.classList.remove("visible");
+        }
+
+        function renderStreams() {
+            streamList.replaceChildren();
+
+            for (const stream of streams) {
+                const button = document.createElement("button");
+
+                button.type = "button";
+                button.className = "stream-button";
+                button.dataset.id = stream.id;
+                button.textContent = "▶ " + stream.name;
+                button.setAttribute(
+                    "aria-pressed",
+                    String(stream.id === currentStreamId)
                 );
+
+                if (stream.id === currentStreamId) {
+                    button.classList.add("active");
+                }
+
+                button.addEventListener("click", () => {
+                    playStream(stream);
+                });
+
+                streamList.appendChild(button);
+            }
+
+            emptyMessage.style.display =
+                streams.length === 0 ? "block" : "none";
+        }
+
+        async function attemptPlayback() {
+            const attempt = playbackAttempt;
+
+            // First try autoplay with audio enabled.
+            video.muted = false;
+
+            try {
+                await video.play();
+                return;
+            } catch (error) {
+                if (attempt !== playbackAttempt) return;
+            }
+
+            // If the browser blocks autoplay with sound, try muted autoplay.
+            video.muted = true;
+
+            try {
+                await video.play();
+            } catch (error) {
+                if (attempt !== playbackAttempt) return;
+
+                showError(
+                    "Playback didn't start automatically. Tap Play on the " +
+                    "video. If it still doesn't work, check that Ace Stream " +
+                    "Engine is running on this device."
+                );
+            }
+        }
+
+        function playStream(stream) {
+            if (!stream || !stream.id) {
+                showError("This stream has an invalid ID.");
                 return;
             }
+
+            playbackAttempt++;
+            currentStreamId = stream.id;
+            clearError();
 
             if (hls) {
                 hls.destroy();
@@ -90,19 +217,34 @@
             video.removeAttribute("src");
             video.load();
 
-            showStatus("Connecting to " + streamName + "…");
+            renderStreams();
 
-            const url =
-                "http://127.0.0.1:6878/ace/manifest.m3u8?content_id=" +
-                encodeURIComponent(contentId);
+            const url = ACE_URL +
+                "/ace/manifest.m3u8?content_id=" +
+                encodeURIComponent(stream.id);
 
             if (video.canPlayType("application/vnd.apple.mpegurl")) {
                 video.src = url;
-                video.play().catch(() => {
-                    showStatus(
-                        "Stream selected. Tap Play, or check that Ace Stream Engine is running."
+
+                video.addEventListener("error", () => {
+                    if (currentStreamId !== stream.id) return;
+
+                    showError(
+                        "Couldn't play this stream. Check that Ace Stream " +
+                        "Engine is running and the stream is available."
                     );
-                });
+                }, { once: true });
+
+                video.addEventListener("loadedmetadata", () => {
+                    if (currentStreamId === stream.id) {
+                        attemptPlayback();
+                    }
+                }, { once: true });
+
+                video.load();
+
+                // Some browsers need playback attempted immediately.
+                attemptPlayback();
                 return;
             }
 
@@ -110,24 +252,23 @@
                 hls = new Hls();
 
                 hls.on(Hls.Events.ERROR, (_event, data) => {
-                    if (data.fatal) {
-                        showStatus(
-                            "Playback failed. Check that Ace Stream Engine is running " +
-                            "and that your browser allows access to its local API. " +
-                            "Details: " + (data.details || data.type || "unknown error")
-                        );
-                        hls.destroy();
-                        hls = null;
+                    if (
+                        currentStreamId !== stream.id ||
+                        !data.fatal
+                    ) {
+                        return;
                     }
+
+                    showError(
+                        "Couldn't play this stream. Check that Ace Stream " +
+                        "Engine is running, then try another server."
+                    );
                 });
 
                 hls.on(Hls.Events.MANIFEST_PARSED, () => {
-                    showStatus("Stream loaded: " + streamName);
-                    video.play().catch(() => {
-                        showStatus(
-                            "Stream loaded. Tap Play to begin watching."
-                        );
-                    });
+                    if (currentStreamId === stream.id) {
+                        attemptPlayback();
+                    }
                 });
 
                 hls.loadSource(url);
@@ -135,19 +276,76 @@
                 return;
             }
 
-            showStatus("This browser does not support the required HLS playback.");
-        }
-
-        playButton.addEventListener("click", playStream);
-
-        if (validId) {
-            showStatus("Opening " + streamName + "…");
-            playStream();
-        } else {
-            showStatus(
-                "Open this page using a Watch button in your Telegram bot."
+            showError(
+                "This browser doesn't support the playback format required " +
+                "by this player."
             );
         }
+
+        async function init() {
+            // Make a Telegram-selected stream available immediately.
+            // This works even when no public streams.json exists.
+            if (selectedId) {
+                streams.push({
+                    id: selectedId,
+                    name: selectedName
+                });
+                renderStreams();
+            }
+
+            if (selectedId) {
+                playStream({
+                    id: selectedId,
+                    name: selectedName
+                });
+            }
+
+            // Load the additional server list, if available.
+            try {
+                const response = await fetch(STREAMS_URL, {
+                    cache: "no-store"
+                });
+
+                if (!response.ok) {
+                    throw new Error("Server list unavailable");
+                }
+
+                const data = await response.json();
+
+                if (!Array.isArray(data)) {
+                    throw new Error("Invalid server list");
+                }
+
+                const seen = new Set(streams.map(stream => stream.id));
+
+                for (const item of data) {
+                    const id = item.id || item.content_id;
+
+                    if (!id || seen.has(id)) continue;
+
+                    seen.add(id);
+
+                    streams.push({
+                        id,
+                        name: item.name || "Unnamed server"
+                    });
+                }
+
+                renderStreams();
+            } catch (error) {
+                // The public page can still play a stream selected in Telegram.
+                // Missing streams.json is not a playback error.
+                if (!selectedId) {
+                    showError(
+                        "Couldn't load the server list. You can still open a " +
+                        "stream by using its Watch link in Telegram."
+                    );
+                }
+            }
+        }
+
+        init();
     </script>
 </body>
+
 </html>
