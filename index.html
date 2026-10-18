@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Full Races: F1 Player</title>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <style>
+        body {
+            max-width: 1000px;
+            margin: 25px auto;
+            padding: 0 18px;
+            background: #101114;
+            color: #f5f5f5;
+            font-family: system-ui, sans-serif;
+        }
+
+        video {
+            display: block;
+            width: 100%;
+            max-height: 70vh;
+            background: black;
+            border-radius: 10px;
+        }
+
+        #status {
+            color: #bbb;
+            margin: 12px 0;
+        }
+
+        #streams {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 10px;
+        }
+
+        button {
+            padding: 14px;
+            color: white;
+            background: #24252b;
+            border: 1px solid #45464e;
+            border-radius: 8px;
+            text-align: center;
+            cursor: pointer;
+        }
+
+        button.active {
+            border-color: #e10600;
+        }
+
+        button:hover {
+            background: #33343c;
+        }
+    </style>
+</head>
+
+<body>
+    <h1 style="text-align: center;">🏁 Full Races: F1</h1>
+    <video id="video" controls autoplay playsinline></video>
+    <div id="status">Loading...</div>
+
+    <h2 style="text-align: center;">Servers</h2>
+    <div id="streams"></div>
+
+    <script>
+        const params = new URLSearchParams(location.search);
+        const selectedId = params.get("content_id");
+        const selectedName = params.get("name") || "Selected stream";
+
+        const video = document.getElementById("video");
+        const status = document.getElementById("status");
+        const streamList = document.getElementById("streams");
+
+        let hls = null;
+        let streams = [];
+
+        function playStream(stream) {
+            if (hls) {
+                hls.destroy();
+                hls = null;
+            }
+
+            video.pause();
+            video.removeAttribute("src");
+            video.load();
+
+            document.querySelectorAll("#streams button").forEach(button => {
+                button.classList.toggle(
+                    "active",
+                    button.dataset.id === stream.id
+                );
+            });
+
+            status.textContent = "Loading " + stream.name + "…";
+
+            const url =
+                "http://127.0.0.1:6878/ace/manifest.m3u8?content_id=" +
+                encodeURIComponent(stream.id);
+
+            if (video.canPlayType("application/vnd.apple.mpegurl")) {
+                video.src = url;
+                video.play().catch(() => {
+                    status.textContent = "Connected to " + stream.name + ".";
+                });
+                return;
+            }
+
+            if (window.Hls && Hls.isSupported()) {
+                hls = new Hls();
+                hls.loadSource(url);
+                hls.attachMedia(video);
+
+                hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                    status.textContent = stream.name;
+                    video.play().catch(() => {
+                        status.textContent = "Connected to " + stream.name + ".";
+                    });
+                });
+
+                hls.on(Hls.Events.ERROR, (_event, data) => {
+                    if (data.fatal) {
+                        status.textContent =
+                            "Playback failed. The stream may be offline, or Ace Stream " +
+                            "may not be reachable.";
+                    }
+                });
+                return;
+            }
+
+            status.textContent = "This browser does not support HLS playback.";
+        }
+
+        function renderStreams() {
+            streamList.replaceChildren();
+
+            streams.forEach(stream => {
+                const button = document.createElement("button");
+                button.dataset.id = stream.id;
+                button.textContent = stream.name;
+                button.addEventListener("click", () => playStream(stream));
+                streamList.appendChild(button);
+            });
+        }
+
+        async function init() {
+            try {
+                const response = await fetch("/streams.json", {
+                    cache: "no-store"
+                });
+                if (!response.ok) throw new Error("Stream list unavailable");
+
+                streams = await response.json();
+
+                // Keep the selected ID available even if the page's stream list
+                // changes between clicking the Telegram button and opening the page.
+                if (
+                    selectedId &&
+                    !streams.some(stream => stream.id === selectedId)
+                ) {
+                    streams.unshift({
+                        id: selectedId,
+                        name: selectedName
+                    });
+                }
+
+                renderStreams();
+
+                if (selectedId) {
+                    playStream({
+                        id: selectedId,
+                        name: selectedName
+                    });
+                } else if (streams.length) {
+                    playStream(streams[0]);
+                } else {
+                    status.textContent = "No stream IDs were found.";
+                }
+            } catch (error) {
+                status.textContent =
+                    "Couldn't load streams. Check that the bot and player server are running.";
+            }
+        }
+
+        init();
+    </script>
+</body>
+
+</html>
