@@ -141,7 +141,8 @@
         playButton.addEventListener("click", playStream);
 
         if (validId) {
-            showStatus("Selected: " + streamName + ". Ready to connect.");
+            showStatus("Opening " + streamName + "…");
+            playStream();
         } else {
             showStatus(
                 "Open this page using a Watch button in your Telegram bot."
